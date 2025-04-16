@@ -1,5 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/int32_multi_array.hpp>
+#include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <eigen3/Eigen/Dense>
@@ -13,7 +14,7 @@ class JointPublisher : public rclcpp::Node {
 public:
     JointPublisher()
         : Node("joint_publisher"), q(VectorXd::Zero(3)), t(0.0), dt(0.01), a_q_move(VectorXd::Zero(3)), elapsed_time(0.0) {
-        publisher_angles = this->create_publisher<std_msgs::msg::Int32MultiArray>("/joint_angles", 10);
+        publisher_angles = this->create_publisher<std_msgs::msg::Float32MultiArray>("/joint_angles", 10);
         publisher_flags = this->create_publisher<std_msgs::msg::Bool>("/joint_flags", 10); // change msg type to int
 
         // Subscriber for desired position
@@ -43,25 +44,35 @@ private:
     }
 
     void timer_callback() {
-        VectorXd qdot = compute_joint_angle_update(q, t); // for calc
-        VectorXd q_move = qdot * dt;  // Not for calc
-        a_q_move += q_move*180/M_PI;  // Not for calc
-        VectorXd pos = direct_kinematics_SCARA(q);  // Not for calc
+        VectorXd qdot = compute_joint_angle_update(q);
+        VectorXd q_move = qdot * dt; // angle to be moved for the time step
+        a_q_move += q_move*180/M_PI; // accumulated angle to be moved being published to motors
+        VectorXd pos = direct_kinematics_SCARA(q); // calculating pose based on model alone not real robot
 
-        q += qdot * dt;  // for calc
-        t += dt;  // for calc
-        elapsed_time += dt;  // Not for calcs
+        q += qdot * dt;
+        //t += dt;
+        elapsed_time += dt;
 
         // Publish the accumulated updates every 1 seconds this needs to be updated when publishing to stepper motors
         if (elapsed_time >= 1) {
-            std_msgs::msg::Int32MultiArray msg;
-            std::vector<int32_t> int_data;
-            // Convert each element using rounding
+            std_msgs::msg::Float32MultiArray msg;
+            //std::vector<float> int_data;
+            //// Convert each element using rounding
+            //for (int i = 0; i < a_q_move.size(); ++i) {
+            //    int_data.push_back(static_cast<float>(std::round(a_q_move(i))));
+            //}
+            const float STEP = 0.08f;
+            std::vector<float> float_data;
             for (int i = 0; i < a_q_move.size(); ++i) {
-                int_data.push_back(static_cast<int32_t>(std::round(a_q_move(i))));
+                float raw = static_cast<float>(a_q_move(i));
+                // round to two decimals
+                float two_dec = std::round(raw * 100.0f) / 100.0f;
+                // quantize to nearest motor‐step increment
+                float quantized = std::round(two_dec / STEP) * STEP;
+                float_data.push_back(two_dec);
             }
-
-            msg.data = int_data;
+            msg.data = float_data;
+            //msg.data.assign(a_q_move.data(), a_q_move.data() + a_q_move.size());
             double error  = (pd - pos).norm();
             
             if (error >= 0.001){ // need to change flags from bool to int
@@ -110,7 +121,7 @@ private:
         return J_A;
     }
 
-    VectorXd compute_joint_angle_update(const VectorXd &q, double t) {
+    VectorXd compute_joint_angle_update(const VectorXd &q) {
 
         VectorXd pd_dot(3);
         pd_dot(0) = 0.0;
@@ -126,7 +137,7 @@ private:
         return qdot;
     }
 
-    rclcpp::Publisher<std_msgs::msg::Int32MultiArray>::SharedPtr publisher_angles;
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr publisher_angles;
     rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr position_subscriber_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr publisher_flags; // change msg type to int
     rclcpp::TimerBase::SharedPtr timer_;

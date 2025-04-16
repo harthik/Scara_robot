@@ -11,9 +11,12 @@
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
 #include <std_msgs/msg/int32_multi_array.h>
+#include <std_msgs/msg/float32_multi_array.h>
 #include <std_msgs/msg/bool.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
+#include <math.h> 
+#include <stdint.h>
 
 #define BLINK_GPIO 2
 #define M1_IN1_PIN 13
@@ -38,18 +41,19 @@ static const char *TAG = "ROS_NODE";
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){ESP_LOGW(TAG, "Failed status on line %d: %d. Continuing.", __LINE__, (int)temp_rc);}}
 
 rcl_subscription_t subscriber;
-std_msgs__msg__Int32MultiArray msg;
+std_msgs__msg__Float32MultiArray msg;
 
-void rotateMotor(int degrees, int in1_pin, int in2_pin, int in3_pin, int in4_pin) {
+
+void rotateMotor(float degrees, int in1_pin, int in2_pin, int in3_pin, int in4_pin) {
     int stepSequence[4][4] = {
         {1, 1, 0, 0},
         {0, 1, 1, 0},
         {0, 0, 1, 1},
         {1, 0, 0, 1}
     };
-
-    int numSteps = abs(degrees * 2048) / 360;
-
+    int numSteps = (int)roundf( fabsf(degrees) * 2048.0f / 360.0f );
+    //int numSteps = fabsf(degrees * 2048) / 360;
+    ESP_LOGI(TAG, "steps %d", numSteps);
     for (int i = 0; i < numSteps; i++) {
         int stepIndex;
         if (degrees < 0) {
@@ -73,7 +77,7 @@ void rotateMotor(int degrees, int in1_pin, int in2_pin, int in3_pin, int in4_pin
     gpio_set_level(in4_pin, 0);
 }
 
-void rotateDC(int degrees,int in1_pin, int in2_pin, int enA_channel) {
+void rotateDC(float degrees,int in1_pin, int in2_pin, int enA_channel) {
     int speed = degrees * 10;
     ledc_set_duty(LEDC_LOW_SPEED_MODE, enA_channel, speed);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, enA_channel);
@@ -90,35 +94,35 @@ void rotateDC(int degrees,int in1_pin, int in2_pin, int enA_channel) {
 }
 
 void rotateMotorTask1(void *arg) {
-    int degrees = *(int *)arg;
-    ESP_LOGI(TAG, "rotate motor a %d", degrees);
+    float degrees = *(float *)arg;
+    ESP_LOGI(TAG, "rotate motor a %f", degrees);
     rotateMotor(degrees, M1_IN1_PIN, M1_IN2_PIN, M1_IN3_PIN, M1_IN4_PIN);
     free(arg); // Free allocated memory
     vTaskDelete(NULL);
 }
 
 void rotateMotorTask2(void *arg) {
-    int degrees = *(int *)arg;
-    ESP_LOGI(TAG, "rotate motor b %d", degrees);
+    float degrees = *(float *)arg;
+    ESP_LOGI(TAG, "rotate motor b %f", degrees);
     rotateMotor(degrees, M2_IN1_PIN, M2_IN2_PIN, M2_IN3_PIN, M2_IN4_PIN);
     free(arg); // Free allocated memory
     vTaskDelete(NULL);
 }
 
 void rotateMotorTask3(void *arg) { // subscribe to another topic which just publishes the flags to move
-    int degrees = *(int *)arg;     // need to write a publisher node which will publish on the flags topic once it reaches the desired height
-    ESP_LOGI(TAG, "rotate motor c %d", degrees); // instead of publishing on the flags topic we can create another topic to publish on which publishes the 
+    float degrees = *(float *)arg;     // need to write a publisher node which will publish on the flags topic once it reaches the desired height
+    ESP_LOGI(TAG, "rotate motor c %f", degrees); // instead of publishing on the flags topic we can create another topic to publish on which publishes the 
     rotateDC(degrees, M3_IN1_PIN, M3_IN2_PIN, enA);
     free(arg); // Free allocated memory
     vTaskDelete(NULL);
 }
 
 void subscription_callback(const void *msgin) {
-    const std_msgs__msg__Int32MultiArray *msg = (const std_msgs__msg__Int32MultiArray *)msgin;
+    const std_msgs__msg__Float32MultiArray *msg = (const std_msgs__msg__Float32MultiArray *)msgin;
     if (msg->data.size >= 3) {
-        int *degrees1 = malloc(sizeof(int));
-        int *degrees2 = malloc(sizeof(int));
-        int *degrees3 = malloc(sizeof(int));
+        float *degrees1 = malloc(sizeof(float));
+        float *degrees2 = malloc(sizeof(float));
+        float *degrees3 = malloc(sizeof(float));
 
         if (degrees1 == NULL || degrees2 == NULL || degrees3 == NULL) {
             ESP_LOGE(TAG, "Memory allocation failed");
@@ -165,12 +169,12 @@ void micro_ros_task(void *arg) {
     RCCHECK(rclc_subscription_init_default(
         &subscriber,
         &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32MultiArray),
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
         "joint_angles"));
 
     // Allocate memory for the message
     msg.data.capacity = 12; // Change this value based on your needs
-    msg.data.data = (int32_t *)malloc(msg.data.capacity * sizeof(int32_t));
+    msg.data.data = (float *)malloc(msg.data.capacity * sizeof(float));
     msg.data.size = 0;
 
     // Create executor.
