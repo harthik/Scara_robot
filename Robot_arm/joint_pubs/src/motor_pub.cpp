@@ -1,5 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/int32_multi_array.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <geometry_msgs/msg/point.hpp>
@@ -19,7 +20,7 @@ public:
 
         // Subscriber for desired position
         position_subscriber_ = this->create_subscription<geometry_msgs::msg::Point>(
-            "desired_pos",
+            "/desired_pos",
             10,
             std::bind(&JointPublisher::position_callback, this, _1));
 
@@ -56,19 +57,20 @@ private:
         // Publish the accumulated updates every 1 seconds this needs to be updated when publishing to stepper motors
         if (elapsed_time >= 1) {
             std_msgs::msg::Float32MultiArray msg;
+            std_msgs::msg::Bool msg_flag;
             //std::vector<float> int_data;
             //// Convert each element using rounding
             //for (int i = 0; i < a_q_move.size(); ++i) {
             //    int_data.push_back(static_cast<float>(std::round(a_q_move(i))));
             //}
-            const float STEP = 0.08f;
+            //const float STEP = 0.08f;
             std::vector<float> float_data;
             for (int i = 0; i < a_q_move.size(); ++i) {
                 float raw = static_cast<float>(a_q_move(i));
                 // round to two decimals
                 float two_dec = std::round(raw * 100.0f) / 100.0f;
                 // quantize to nearest motor‐step increment
-                float quantized = std::round(two_dec / STEP) * STEP;
+                //float quantized = std::round(two_dec / STEP) * STEP;
                 float_data.push_back(two_dec);
             }
             msg.data = float_data;
@@ -76,16 +78,21 @@ private:
             double error  = (pd - pos).norm();
             
             if (error >= 0.001){ // need to change flags from bool to int
-                std_msgs::msg::Bool msg_flag;
-                msg_flag.data = true;
+                msg_flag.data = false;
                 publisher_flags->publish(msg_flag);
                 publisher_angles->publish(msg);
                 RCLCPP_INFO(this->get_logger(),"moving");
+                RCLCPP_INFO(this->get_logger(), "error is %f", error);
+                RCLCPP_INFO(this->get_logger(), "publishing q_move: [%f, %f, %f]", a_q_move(0), a_q_move(1), a_q_move(2));
+                RCLCPP_INFO(this->get_logger(), "at position [%f, %f, %f]", pos(0), pos(1), pos(2));
+            }
+            else if (msg_flag.data == false && error < 0.001) {
+                msg_flag.data = true;
+                publisher_flags->publish(msg_flag);
+                RCLCPP_INFO(this->get_logger(),"reached");
             }
             // add an another if statement such that when error is less than 0.001 we increment the flag value 
-            RCLCPP_INFO(this->get_logger(), "error is %f", error);
-            RCLCPP_INFO(this->get_logger(), "publishing q_move: [%f, %f, %f]", a_q_move(0), a_q_move(1), a_q_move(2));
-            RCLCPP_INFO(this->get_logger(), "at position [%f, %f, %f]", pos(0), pos(1), pos(2));
+            
             // instead of using a bool flag we will use a number that can be incremented every time we publish this
             // would make it easy to decide which stage we
             // Reset the accumulator and elapsed time
