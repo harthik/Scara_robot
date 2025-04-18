@@ -41,6 +41,7 @@ static const char *TAG = "ROS_NODE";
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){ESP_LOGW(TAG, "Failed status on line %d: %d. Continuing.", __LINE__, (int)temp_rc);}}
 
 rcl_subscription_t subscriber;
+rcl_publisher_t publisher;
 std_msgs__msg__Float32MultiArray msg;
 
 
@@ -77,20 +78,28 @@ void rotateMotor(float degrees, int in1_pin, int in2_pin, int in3_pin, int in4_p
     gpio_set_level(in4_pin, 0);
 }
 
-void rotateDC(float degrees,int in1_pin, int in2_pin, int enA_channel) {
-    int speed = degrees * 10;
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, enA_channel, speed);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, enA_channel);
+void rotateDC(float degrees,int in1_pin, int in2_pin, ledc_channel_t channel_id) {
+    uint32_t duty = 205;
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, channel_id, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, channel_id);
 
-    gpio_set_level(in1_pin, 1);
-    gpio_set_level(in2_pin, 0);
+    if (degrees < 0) {
+        ESP_LOGI(TAG,"reverse");
+        gpio_set_level(in1_pin, 1);
+        gpio_set_level(in2_pin, 0);
+    } 
+    else if (degrees > 0) {
+        ESP_LOGI(TAG,"forward");
+        gpio_set_level(in1_pin, 0);
+        gpio_set_level(in2_pin, 1);
+    }
+    else {
+        ESP_LOGI(TAG,"stop");
+        gpio_set_level(in1_pin, 0);
+        gpio_set_level(in2_pin, 0);
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000));
 
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    gpio_set_level(in1_pin, 0);
-    gpio_set_level(in2_pin, 0);
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, enA_channel, 0);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, enA_channel);
 }
 
 void rotateMotorTask1(void *arg) {
@@ -112,7 +121,7 @@ void rotateMotorTask2(void *arg) {
 void rotateMotorTask3(void *arg) { // subscribe to another topic which just publishes the flags to move
     float degrees = *(float *)arg;     // need to write a publisher node which will publish on the flags topic once it reaches the desired height
     ESP_LOGI(TAG, "rotate motor c %f", degrees); // instead of publishing on the flags topic we can create another topic to publish on which publishes the 
-    rotateDC(degrees, M3_IN1_PIN, M3_IN2_PIN, enA);
+    rotateDC(degrees, M3_IN1_PIN, M3_IN2_PIN, LEDC_CHANNEL_0);
     free(arg); // Free allocated memory
     vTaskDelete(NULL);
 }
@@ -165,6 +174,11 @@ void micro_ros_task(void *arg) {
     rcl_node_t node = rcl_get_zero_initialized_node();
     RCCHECK(rclc_node_init_default(&node, "esp32", "", &support));
 
+    //RCCHECK(rclc_publisher_init_default(
+    //    &publisher,
+    //    &node,
+    //    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
+    //    "actual_flags"));
     // create subscriber
     RCCHECK(rclc_subscription_init_default(
         &subscriber,
@@ -184,6 +198,7 @@ void micro_ros_task(void *arg) {
     RCCHECK(rclc_executor_set_timeout(&executor, RCL_MS_TO_NS(rcl_wait_timeout)));
 
     RCCHECK(rclc_executor_add_subscription(&executor, &subscriber, &msg, &subscription_callback, ON_NEW_DATA));
+    //RCCHECK(rclc_executor_add_publisher(&executor, &publisher, &msg, ON_NEW_DATA));
 
     // Spin forever.
     while (1) {

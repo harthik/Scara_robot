@@ -14,9 +14,9 @@ using std::placeholders::_1;
 class JointPublisher : public rclcpp::Node {
 public:
     JointPublisher()
-        : Node("joint_publisher"), q(VectorXd::Zero(3)), t(0.0), dt(0.01), a_q_move(VectorXd::Zero(3)), elapsed_time(0.0) {
+        : Node("joint_publisher"), q(VectorXd::Zero(3)), t(0.0), dt(0.01), a_q_move(VectorXd::Zero(3)), elapsed_time(0.0),msg_flag(false) {
         publisher_angles = this->create_publisher<std_msgs::msg::Float32MultiArray>("/joint_angles", 10);
-        publisher_flags = this->create_publisher<std_msgs::msg::Bool>("/joint_flags", 10); // change msg type to int
+        publisher_flags = this->create_publisher<std_msgs::msg::Bool>("/joint_flags", 10);
 
         // Subscriber for desired position
         position_subscriber_ = this->create_subscription<geometry_msgs::msg::Point>(
@@ -57,45 +57,35 @@ private:
         // Publish the accumulated updates every 1 seconds this needs to be updated when publishing to stepper motors
         if (elapsed_time >= 1) {
             std_msgs::msg::Float32MultiArray msg;
-            std_msgs::msg::Bool msg_flag;
-            //std::vector<float> int_data;
-            //// Convert each element using rounding
-            //for (int i = 0; i < a_q_move.size(); ++i) {
-            //    int_data.push_back(static_cast<float>(std::round(a_q_move(i))));
-            //}
-            //const float STEP = 0.08f;
             std::vector<float> float_data;
             for (int i = 0; i < a_q_move.size(); ++i) {
                 float raw = static_cast<float>(a_q_move(i));
                 // round to two decimals
                 float two_dec = std::round(raw * 100.0f) / 100.0f;
-                // quantize to nearest motor‐step increment
-                //float quantized = std::round(two_dec / STEP) * STEP;
                 float_data.push_back(two_dec);
             }
             msg.data = float_data;
-            //msg.data.assign(a_q_move.data(), a_q_move.data() + a_q_move.size());
             double error  = (pd - pos).norm();
             
             if (error >= 0.001){ // need to change flags from bool to int
-                msg_flag.data = false;
-                publisher_flags->publish(msg_flag);
+                msg_flag = false;
+                // build a Bool message and publish it
+                std_msgs::msg::Bool flag_msg;
+                flag_msg.data = msg_flag;
+                publisher_flags->publish(flag_msg);
                 publisher_angles->publish(msg);
                 RCLCPP_INFO(this->get_logger(),"moving");
                 RCLCPP_INFO(this->get_logger(), "error is %f", error);
                 RCLCPP_INFO(this->get_logger(), "publishing q_move: [%f, %f, %f]", a_q_move(0), a_q_move(1), a_q_move(2));
                 RCLCPP_INFO(this->get_logger(), "at position [%f, %f, %f]", pos(0), pos(1), pos(2));
             }
-            else if (msg_flag.data == false && error < 0.001) {
-                msg_flag.data = true;
-                publisher_flags->publish(msg_flag);
+            else if (msg_flag == false && error < 0.001) {
+                msg_flag = true;
+                std_msgs::msg::Bool flag_msg;
+                flag_msg.data = msg_flag;
+                publisher_flags->publish(flag_msg);
                 RCLCPP_INFO(this->get_logger(),"reached");
             }
-            // add an another if statement such that when error is less than 0.001 we increment the flag value 
-            
-            // instead of using a bool flag we will use a number that can be incremented every time we publish this
-            // would make it easy to decide which stage we
-            // Reset the accumulator and elapsed time
             a_q_move.setZero();
             elapsed_time = 0.0;
 
@@ -156,6 +146,7 @@ private:
     double elapsed_time;
     VectorXd pdi;
     VectorXd pd;
+    bool msg_flag;
 };
 
 int main(int argc, char *argv[]) {
