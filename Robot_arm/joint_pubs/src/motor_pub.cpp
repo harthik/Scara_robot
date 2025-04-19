@@ -1,6 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/int32_multi_array.hpp>
-#include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <geometry_msgs/msg/point.hpp>
@@ -14,7 +14,7 @@ using std::placeholders::_1;
 class JointPublisher : public rclcpp::Node {
 public:
     JointPublisher()
-        : Node("joint_publisher"), q(VectorXd::Zero(3)), t(0.0), dt(0.01), a_q_move(VectorXd::Zero(3)), elapsed_time(0.0),msg_flag(false) {
+        : Node("joint_publisher"), q(VectorXd::Zero(3)), t(0.0), dt(0.01), a_q_move(VectorXd::Zero(3)), elapsed_time(0.0),msg_flag(false), pos_l(0.12f) {
         publisher_angles = this->create_publisher<std_msgs::msg::Float32MultiArray>("/joint_angles", 10);
         publisher_flags = this->create_publisher<std_msgs::msg::Bool>("/joint_flags", 10);
 
@@ -23,6 +23,10 @@ public:
             "/desired_pos",
             10,
             std::bind(&JointPublisher::position_callback, this, _1));
+
+        actual_pos_sub_ = this->create_subscription<std_msgs::msg::Float32>(
+            "/actual_pos", 10,
+            std::bind(&JointPublisher::actual_pos_call, this, _1));
 
         timer_ = this->create_wall_timer(std::chrono::milliseconds(10), std::bind(&JointPublisher::timer_callback, this));
         q(0) = 0.0;
@@ -43,6 +47,11 @@ private:
         pd(2) = msg->z;
         RCLCPP_INFO(this->get_logger(), "recived pos: [%f, %f, %f]", pd(0), pd(1), pd(2));
     }
+    void actual_pos_call(const std_msgs::msg::Float32::SharedPtr msg) {
+        // Check if the new position is different from the current desired position
+        pos_l = msg->data;
+        RCLCPP_INFO(this->get_logger(), "recived pos: %f", pos_l);
+    }
 
     void timer_callback() {
         VectorXd qdot = compute_joint_angle_update(q);
@@ -55,7 +64,7 @@ private:
         elapsed_time += dt;
 
         // Publish the accumulated updates every 1 seconds this needs to be updated when publishing to stepper motors
-        if (elapsed_time >= 1) {
+        if (elapsed_time >= 0.2) {
             std_msgs::msg::Float32MultiArray msg;
             std::vector<float> float_data;
             for (int i = 0; i < a_q_move.size(); ++i) {
@@ -96,7 +105,7 @@ private:
         VectorXd xe(3);
         xe(0) = 0.1 * cos(q(0)) + 0.08 * cos(q(0) + q(1));
         xe(1) = 0.1 * sin(q(0)) + 0.08 * sin(q(0) + q(1));
-        xe(2) = 1.0 * q(2) + 0.04;
+        xe(2) = static_cast<double>(pos_l); 
         return xe;
     }
 
@@ -137,6 +146,7 @@ private:
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr publisher_angles;
     rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr position_subscriber_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr publisher_flags; // change msg type to int
+    rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr actual_pos_sub_;
     rclcpp::TimerBase::SharedPtr timer_;
     VectorXd q;
     double t;
@@ -147,6 +157,7 @@ private:
     VectorXd pdi;
     VectorXd pd;
     bool msg_flag;
+    float pos_l;
 };
 
 int main(int argc, char *argv[]) {

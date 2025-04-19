@@ -11,12 +11,14 @@
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
 #include <std_msgs/msg/int32_multi_array.h>
+#include <std_msgs/msg/float32.h>
 #include <std_msgs/msg/float32_multi_array.h>
 #include <std_msgs/msg/bool.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
 #include <math.h> 
 #include <stdint.h>
+#include <driver/adc.h>
 
 #define BLINK_GPIO 2
 #define M1_IN1_PIN 13
@@ -29,6 +31,7 @@
 #define M2_IN4_PIN 32
 #define M3_IN1_PIN 4
 #define M3_IN2_PIN 16
+#define LED_PIN 15
 #define enA 17
 
 #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
@@ -41,8 +44,13 @@ static const char *TAG = "ROS_NODE";
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){ESP_LOGW(TAG, "Failed status on line %d: %d. Continuing.", __LINE__, (int)temp_rc);}}
 
 rcl_subscription_t subscriber;
-rcl_publisher_t publisher;
+rcl_publisher_t actual_pos_publisher;
 std_msgs__msg__Float32MultiArray msg;
+std_msgs__msg__Float32 actual_pos_msg;
+
+static int8_t       last_motor_dir  = 0;    // +1=forward, -1=reverse, 0=stopped
+static bool         prev_ldr_state  = false;
+//static const int    LDR_THRESHOLD   = 2900; // tune this to your dark/bright midpoint
 
 
 void rotateMotor(float degrees, int in1_pin, int in2_pin, int in3_pin, int in4_pin) {
@@ -79,29 +87,84 @@ void rotateMotor(float degrees, int in1_pin, int in2_pin, int in3_pin, int in4_p
 }
 
 void rotateDC(float degrees,int in1_pin, int in2_pin, ledc_channel_t channel_id) {
-    uint32_t duty = 205;
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, channel_id, duty);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, channel_id);
 
-    if (degrees < 0) {
-        ESP_LOGI(TAG,"reverse");
+    if (degrees <= -0.0001) {
+        ESP_LOGI(TAG,"up");
+        uint32_t duty = 215;
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, channel_id, duty);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, channel_id);
+        last_motor_dir = -1;
         gpio_set_level(in1_pin, 1);
         gpio_set_level(in2_pin, 0);
     } 
-    else if (degrees > 0) {
-        ESP_LOGI(TAG,"forward");
+    else if (degrees >= 0.0001) {
+        ESP_LOGI(TAG,"down");
+        uint32_t duty = 190;
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, channel_id, duty);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, channel_id);
+        last_motor_dir = +1;
         gpio_set_level(in1_pin, 0);
         gpio_set_level(in2_pin, 1);
     }
     else {
-        ESP_LOGI(TAG,"stop");
+        last_motor_dir = 0;
+        uint32_t duty = 0;
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, channel_id, duty);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, channel_id);
         gpio_set_level(in1_pin, 0);
         gpio_set_level(in2_pin, 0);
     }
+    //rcl_ret_t pub_rc = rcl_publish(&actual_pos_publisher, &actual_pos_msg, NULL);
+    //if (pub_rc != RCL_RET_OK) {
+    //    ESP_LOGE(TAG, "Failed to publish actual_pos: %d", (int)pub_rc);
+    //}
+
     vTaskDelay(pdMS_TO_TICKS(1000));
 
 }
 
+void ldr_encoder_task(void *arg)
+{
+  adc1_config_width(ADC_WIDTH_BIT_12);
+  adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11);
+
+  // optional hysteresis thresholds
+  const int HIGH_THRESH = 2000;
+  const int LOW_THRESH  = 1500;
+  bool bright_state     = false;
+
+  while (1) {
+    int raw = adc1_get_raw(ADC1_CHANNEL_6);
+
+    // Schmitt‐trigger update
+    if (bright_state) {
+      if (raw < LOW_THRESH) bright_state = false;
+    } else {
+      if (raw > HIGH_THRESH) bright_state = true;
+    }
+
+    // rising edge only
+    if (bright_state && !prev_ldr_state) {
+      if (last_motor_dir > 0) {
+        actual_pos_msg.data += 0.01f;
+      } else if (last_motor_dir < 0) {
+        actual_pos_msg.data -= 0.01f;
+      }
+      rcl_ret_t rc = rcl_publish(&actual_pos_publisher,
+                                 &actual_pos_msg,
+                                 NULL);
+      if (rc != RCL_RET_OK) {
+        ESP_LOGE(TAG, "ldr pub failed: %d", (int)rc);
+      }
+    }
+    prev_ldr_state = bright_state;
+
+    // for debugging only: log occasionally
+    ESP_LOGI(TAG, "raw=%d bright=%d pos=%.4f", raw, bright_state, actual_pos_msg.data);
+
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
 void rotateMotorTask1(void *arg) {
     float degrees = *(float *)arg;
     ESP_LOGI(TAG, "rotate motor a %f", degrees);
@@ -174,18 +237,20 @@ void micro_ros_task(void *arg) {
     rcl_node_t node = rcl_get_zero_initialized_node();
     RCCHECK(rclc_node_init_default(&node, "esp32", "", &support));
 
-    //RCCHECK(rclc_publisher_init_default(
-    //    &publisher,
-    //    &node,
-    //    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
-    //    "actual_flags"));
-    // create subscriber
+    // create publisher
     RCCHECK(rclc_subscription_init_default(
         &subscriber,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
         "joint_angles"));
 
+    // create publisher
+    RCCHECK(rclc_publisher_init_default(
+        &actual_pos_publisher,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+        "actual_pos"));
+    actual_pos_msg.data = 0.12f;
     // Allocate memory for the message
     msg.data.capacity = 12; // Change this value based on your needs
     msg.data.data = (float *)malloc(msg.data.capacity * sizeof(float));
@@ -230,10 +295,11 @@ void app_main(void) {
                         (1ULL << M1_IN3_PIN) | (1ULL << M1_IN4_PIN) |
                         (1ULL << M2_IN1_PIN) | (1ULL << M2_IN2_PIN) |
                         (1ULL << M2_IN3_PIN) | (1ULL << M2_IN4_PIN) |
-                        (1ULL << M3_IN1_PIN) | (1ULL << M3_IN2_PIN) 
+                        (1ULL << M3_IN1_PIN) | (1ULL << M3_IN2_PIN) |
+                        (1ULL << LED_PIN),
     };
     gpio_config(&io_config);
-
+    gpio_set_level(LED_PIN, 1);
     // Example for channel 0 on GPIO 18 (change as needed)
     ledc_timer_config_t ledc_timer = {
         .speed_mode       = LEDC_LOW_SPEED_MODE,
@@ -253,6 +319,13 @@ void app_main(void) {
         .timer_sel  = LEDC_TIMER_0
     };
     ledc_channel_config(&ledc_channel);
+
+    xTaskCreate(ldr_encoder_task,
+        "ldr_enc",
+        2048,
+        NULL,
+        5,
+        NULL);
 
 
     // pin micro-ros task in APP_CPU to make PRO_CPU to deal with wifi:
