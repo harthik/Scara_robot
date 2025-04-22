@@ -14,7 +14,7 @@ using std::placeholders::_1;
 class JointPublisher : public rclcpp::Node {
 public:
     JointPublisher()
-        : Node("joint_publisher"), q(VectorXd::Zero(3)), t(0.0), dt(0.01), a_q_move(VectorXd::Zero(3)), elapsed_time(0.0),msg_flag(false), pos_l(0.12f) {
+        : Node("joint_publisher"), q(VectorXd::Zero(3)), t(0.0), dt(0.01), a_q_move(VectorXd::Zero(3)), elapsed_time(0.0),msg_flag(false), pos_l(0.12) {
         publisher_angles = this->create_publisher<std_msgs::msg::Float32MultiArray>("/joint_angles", 10);
         publisher_flags = this->create_publisher<std_msgs::msg::Bool>("/joint_flags", 10);
 
@@ -31,7 +31,7 @@ public:
         timer_ = this->create_wall_timer(std::chrono::milliseconds(10), std::bind(&JointPublisher::timer_callback, this));
         q(0) = 0.0;
         q(1) = M_PI/2;
-        q(2) = 0.08;
+        q(2) = 0.12;
 
         pd = VectorXd::Zero(3);
         pd(0) = 0.1;
@@ -67,6 +67,7 @@ private:
         if (elapsed_time >= 0.2) {
             std_msgs::msg::Float32MultiArray msg;
             std::vector<float> float_data;
+            a_q_move(2) = a_q_move(2)*M_PI/180; // convert to radians
             for (int i = 0; i < a_q_move.size(); ++i) {
                 float raw = static_cast<float>(a_q_move(i));
                 // round to two decimals
@@ -97,7 +98,6 @@ private:
             }
             a_q_move.setZero();
             elapsed_time = 0.0;
-
         }
     }
 
@@ -105,7 +105,8 @@ private:
         VectorXd xe(3);
         xe(0) = 0.1 * cos(q(0)) + 0.08 * cos(q(0) + q(1));
         xe(1) = 0.1 * sin(q(0)) + 0.08 * sin(q(0) + q(1));
-        xe(2) = static_cast<double>(pos_l); 
+        //xe(2) = (32/15) * 0.5 * q(2) * 0.001; // conversion from motor rotations to z position (pos_l is the revolutions of the motor)
+        xe(2) = q(2);
         return xe;
     }
 
@@ -123,7 +124,8 @@ private:
         // Third row: partial derivatives of z
         J_A(2, 0) = 0;
         J_A(2, 1) = 0;
-        J_A(2, 2) = 1.0;
+        //J_A(2, 2) = (32/15) * 0.5 * 0.001;
+        J_A(2, 2) = 1; // conversion from motor rotations to z position (pos_l is the revolutions of the motor)
         return J_A;
     }
 

@@ -10,6 +10,7 @@ public:
   {
     // Create a publisher on the "point" topic, queue depth 10
     pub_pos = this->create_publisher<geometry_msgs::msg::Point>("/desired_pos", 10);
+    // publish bool value for grip or drop
     sub_flags = this->create_subscription<std_msgs::msg::Bool>(
         "/joint_flags",
         10,
@@ -17,9 +18,9 @@ public:
 
       task_points_.resize(3);
 
-      task_points_[0].x = 0.1; task_points_[0].y = 0.08; task_points_[0].z = 0.1;
+      task_points_[0].x = 0.1; task_points_[0].y = 0.08; task_points_[0].z = 0.08;
       task_points_[1].x = 0.1; task_points_[1].y = 0.08; task_points_[1].z = 0.12;
-      task_points_[2].x = 0.1; task_points_[2].y = 0.08; task_points_[2].z = 0.1;
+      task_points_[2].x = 0.1; task_points_[2].y = 0.08; task_points_[2].z = 0.08;
   }
 
 private:
@@ -46,7 +47,7 @@ private:
     void publish_point(int idx)
     {
         int vi = std::clamp(idx - 1, 0, (int)task_points_.size() - 1);
-
+        // if index is say 3 we dont want to publish that point but set the point the same as point 2 but publish a bool value to grip or drop
         auto msg = task_points_[vi];
         RCLCPP_INFO(this->get_logger(),
                     "Publishing Point(x=%.2f, y=%.2f, z=%.2f)",

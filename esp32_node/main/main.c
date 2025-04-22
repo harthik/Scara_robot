@@ -46,7 +46,7 @@ static const char *TAG = "ROS_NODE";
 rcl_subscription_t subscriber;
 rcl_publisher_t actual_pos_publisher;
 std_msgs__msg__Float32MultiArray msg;
-std_msgs__msg__Float32 actual_pos_msg;
+std_msgs__msg__Int32 actual_pos_msg;
 
 static int8_t       last_motor_dir  = 0;    // +1=forward, -1=reverse, 0=stopped
 static bool         prev_ldr_state  = false;
@@ -88,18 +88,18 @@ void rotateMotor(float degrees, int in1_pin, int in2_pin, int in3_pin, int in4_p
 
 void rotateDC(float degrees,int in1_pin, int in2_pin, ledc_channel_t channel_id) {
 
-    if (degrees <= -0.0001) {
+    if (degrees <= -0.001) {
         ESP_LOGI(TAG,"up");
-        uint32_t duty = 215;
+        uint32_t duty = 200 + degrees * 0.05;
         ledc_set_duty(LEDC_LOW_SPEED_MODE, channel_id, duty);
         ledc_update_duty(LEDC_LOW_SPEED_MODE, channel_id);
         last_motor_dir = -1;
         gpio_set_level(in1_pin, 1);
         gpio_set_level(in2_pin, 0);
     } 
-    else if (degrees >= 0.0001) {
+    else if (degrees >= 0.001) {
         ESP_LOGI(TAG,"down");
-        uint32_t duty = 190;
+        uint32_t duty = 190 + degrees * 0.05;
         ledc_set_duty(LEDC_LOW_SPEED_MODE, channel_id, duty);
         ledc_update_duty(LEDC_LOW_SPEED_MODE, channel_id);
         last_motor_dir = +1;
@@ -146,9 +146,9 @@ void ldr_encoder_task(void *arg)
     // rising edge only
     if (bright_state && !prev_ldr_state) {
       if (last_motor_dir > 0) {
-        actual_pos_msg.data += 0.01f;
+        actual_pos_msg.data += 32/15 * 0.5* 0.001;
       } else if (last_motor_dir < 0) {
-        actual_pos_msg.data -= 0.01f;
+        actual_pos_msg.data -= 32/15 * 0.5* 0.001;
       }
       rcl_ret_t rc = rcl_publish(&actual_pos_publisher,
                                  &actual_pos_msg,
@@ -189,28 +189,35 @@ void rotateMotorTask3(void *arg) { // subscribe to another topic which just publ
     vTaskDelete(NULL);
 }
 
+// create function for grip or drop state of servo motor
+
+
 void subscription_callback(const void *msgin) {
     const std_msgs__msg__Float32MultiArray *msg = (const std_msgs__msg__Float32MultiArray *)msgin;
     if (msg->data.size >= 3) {
         float *degrees1 = malloc(sizeof(float));
         float *degrees2 = malloc(sizeof(float));
         float *degrees3 = malloc(sizeof(float));
+        // create bool value for state
 
         if (degrees1 == NULL || degrees2 == NULL || degrees3 == NULL) {
             ESP_LOGE(TAG, "Memory allocation failed");
             free(degrees1);
             free(degrees2);
             free(degrees3);
+            //free the variable
             return;
         }
 
         *degrees1 = msg->data.data[0];
         *degrees2 = msg->data.data[1];
         *degrees3 = msg->data.data[2];
+        //assign value of grip or drop
 
         xTaskCreate(rotateMotorTask1, "motor_task1", 2048, degrees1, 5, NULL);
         xTaskCreate(rotateMotorTask2, "motor_task2", 2048, degrees2, 5, NULL);
         xTaskCreate(rotateMotorTask3, "motor_task3", 2048, degrees3, 5, NULL);
+        //call back for the state 
     }
 }
 
@@ -237,12 +244,15 @@ void micro_ros_task(void *arg) {
     rcl_node_t node = rcl_get_zero_initialized_node();
     RCCHECK(rclc_node_init_default(&node, "esp32", "", &support));
 
-    // create publisher
+    // create subscriber
     RCCHECK(rclc_subscription_init_default(
         &subscriber,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
         "joint_angles"));
+    
+    // create another subscriber to listen to stepper states data type bool
+    
 
     // create publisher
     RCCHECK(rclc_publisher_init_default(
