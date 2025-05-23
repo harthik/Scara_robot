@@ -11,3 +11,5 @@ ros2 run joint_pubs motor_pub
 
 5) publish desired position
 ros2 topic pub /desired_pos geometry_msgs/msg/Point "{x: 0.15, y: 0.05, z: 0.12}" -1
+
+[![Watch the video]](https://raw.githubusercontent.com/harthik/Scara_robot/main/IMG_4559.MOV)
