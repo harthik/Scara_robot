@@ -64,7 +64,7 @@ private:
         elapsed_time += dt;
 
         // Publish the accumulated updates every 1 seconds this needs to be updated when publishing to stepper motors
-        if (elapsed_time >= 0.2) {
+        if (elapsed_time >= 1.0) {
             std_msgs::msg::Float32MultiArray msg;
             std::vector<float> float_data;
             for (int i = 0; i < a_q_move.size(); ++i) {
