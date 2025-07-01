@@ -1,3 +1,6 @@
+# Scara Robot Arm - Pick and Place
+In this project we designed and developed a scara robot arm capable of performing pick and place tasks. Simple inverse jacobian controller is used to control the robot arm.
+
 1) set robot to q = [0 0 0]
 
 2) start esp32 using docker
